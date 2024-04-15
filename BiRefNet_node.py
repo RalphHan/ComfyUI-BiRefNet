@@ -36,29 +36,42 @@ class BiRefNet_img_processor:
         image = self.transform_image(_image_rs)
         return image
 
+
+model_cache = None
+
 class BiRefNet_node:
     def __init__(self):
         self.ready = False
 
     def load(self, weight_path, device, verbose=False):
         try:
+            global model_cache
+            if model_cache is not None:
+                self.model = model_cache["model"]
+                self.processor = model_cache["processor"]
+                self.ready = True
+                return
             map_location = 'cpu' if device == 'cpu' else None
             if device == 'mps' and torch.backends.mps.is_available():
                 map_location = torch.device('mps')
-                
+
             self.model = BiRefNet()
             state_dict = torch.load(weight_path, map_location=map_location)
             unwanted_prefix = '_orig_mod.'
             for k, v in list(state_dict.items()):
                 if k.startswith(unwanted_prefix):
                     state_dict[k[len(unwanted_prefix):]] = state_dict.pop(k)
-            
+
             self.model.load_state_dict(state_dict)
             self.model.to(device)
             self.model.eval()
 
             self.processor = BiRefNet_img_processor(config)
             self.ready = True
+            model_cache = {
+                "model": self.model,
+                "processor": self.processor
+            }
             if verbose:
                 logger.debug("Model loaded successfully on device: {}".format(device))
         except Exception as e:
@@ -99,12 +112,12 @@ class BiRefNet_node:
         if not self.ready:
             weight_path = os.path.join(models_dir, "BiRefNet", "BiRefNet-ep480.pth")
             self.load(weight_path, device=device)
-        
+
         image = image.squeeze().numpy()
         img = self.processor(image)
         inputs = img[None, ...].to(device)
         logger.debug(f"{inputs.shape}")
-        
+
         with torch.no_grad():
             self.model.to(device)  # Move the model to the selected device
             scaled_preds = self.model(inputs)[-1].sigmoid()
